@@ -1,0 +1,297 @@
+function mkcdir() {
+    mkdir -p -- "$1" &&
+    cd -P -- "$1"
+}
+
+function insort() {
+    sort "$1" -o "$1"
+}
+
+
+function headers() {
+    if [[ $# == 1 ]]; then
+        sep=','
+    else
+        sep=$2
+    fi
+
+    python -c "print(*map(lambda s: s.replace('\n', '<<<newline>>>'), next(__import__('csv').reader(open('$1'), delimiter='$sep'))), sep='\n')" | cat -n
+}
+
+
+function makenv() {
+    # $1 is the version
+
+    v=$(pyenv global)
+    pyenv global "$1" || { pyenv install "$1" && pyenv global "$1" }
+
+    pip install -U pip
+    name=$(basename `pwd`)
+    python -m venv  ".$name"
+    ln -s ".$name" .venv
+
+    pyenv global "$v"
+
+    source .venv/bin/activate
+    pip install -U pip
+
+    pip install pigar ipython
+    for i in `seq 2 1 "$#"`; do
+        pip install ${@:$i:1}
+    done
+
+}
+
+
+function again() {
+    dei=$(pwd)
+    cd ..
+    source ~/.zshrc
+    echo "$dei"
+    cd "$dei"
+}
+
+function rss() {
+    echo -n "Would you like to refresh (Y/n)? "
+    read resp
+
+    if [[ $resp == "Y" || $resp == "Y" || $resp == "" ]]
+    then
+        newsboat -r
+    else
+        newsboat
+    fi
+}
+
+
+function git() {
+    local workspace_root="$HOME/workspace"
+    local worktrees_root="$HOME/worktrees"
+
+    case "$1" in
+        co)
+            if [[ $# -ne 2 ]]; then
+                echo "Usage: git co <branch>" >&2
+                return 1
+            fi
+            local target_branch="$2"
+            local current_path relative_repo_path workspace_path
+            current_path=$(command git rev-parse --show-toplevel 2>/dev/null) || {
+                echo "Not in a git repository" >&2
+                return 1
+            }
+            case "$current_path" in
+                "$workspace_root"/*)
+                    workspace_path="$current_path"
+                    relative_repo_path="${workspace_path#"$workspace_root"/}"
+                    ;;
+                "$worktrees_root"/*)
+                    local current_branch
+                    current_branch=$(command git branch --show-current)
+                    local relative_with_branch="${current_path#"$worktrees_root"/}"
+                    relative_repo_path="${relative_with_branch%/"$current_branch"}"
+                    workspace_path="$workspace_root/$relative_repo_path"
+                    ;;
+                *)
+                    echo "Repository must live under $workspace_root or $worktrees_root" >&2
+                    return 1
+                    ;;
+            esac
+            if [[ ! -d "$workspace_path" ]]; then
+                echo "Workspace repo not found: $workspace_path" >&2
+                return 1
+            fi
+            if ! command git -C "$workspace_path" show-ref --verify --quiet "refs/heads/$target_branch" && \
+               ! command git -C "$workspace_path" show-ref --verify --quiet "refs/remotes/origin/$target_branch"; then
+                echo "Branch not found: $target_branch" >&2
+                return 1
+            fi
+            local landing_branch
+            if command git -C "$workspace_path" show-ref --verify --quiet refs/heads/main; then
+                landing_branch=main
+            elif command git -C "$workspace_path" show-ref --verify --quiet refs/heads/master; then
+                landing_branch=master
+            else
+                echo "Could not find main or master in $workspace_path" >&2
+                return 1
+            fi
+            if [[ "$target_branch" == "$landing_branch" ]]; then
+                cd "$workspace_path"
+                return
+            fi
+            local target_path="$worktrees_root/$relative_repo_path/$target_branch"
+            if [[ ! -d "$target_path" ]]; then
+                echo "Worktree not found for branch '$target_branch': $target_path" >&2
+                return 1
+            fi
+            cd "$target_path"
+            ;;
+
+        cob)
+            if [[ $# -ne 2 ]]; then
+                echo "Usage: git cob <branch>" >&2
+                return 1
+            fi
+            local branch="$2"
+            local repo_root
+            repo_root=$(command git rev-parse --show-toplevel 2>/dev/null) || {
+                echo "Not in a git repository" >&2
+                return 1
+            }
+            if [[ "$repo_root" != "$workspace_root"/* ]]; then
+                echo "Repository must live under $workspace_root" >&2
+                return 1
+            fi
+            local relative_repo_path="${repo_root#"$workspace_root"/}"
+            local target_path="$worktrees_root/$relative_repo_path/$branch"
+            if command git show-ref --verify --quiet "refs/heads/$branch"; then
+                echo "Branch already exists: $branch" >&2
+                return 1
+            fi
+            if [[ -e "$target_path" ]]; then
+                echo "Worktree path already exists: $target_path" >&2
+                return 1
+            fi
+            mkdir -p "$(dirname "$target_path")"
+            if ! command git rev-parse --verify --quiet HEAD^{commit} >/dev/null 2>&1; then
+                echo "No possible source branch, exiting" >&2
+                return 1
+            fi
+            command git worktree add -b "$branch" "$target_path" || return $?
+            local source_venv="$PWD/.venv"
+            local source_env="$PWD/.env"
+            local source_claude_dir="$PWD/.claude"
+            local source_claude_md="$PWD/CLAUDE.md"
+            [[ -e "$source_venv"       && ! -e "$target_path/.venv"    ]] && ln -s "$source_venv"       "$target_path/.venv"
+            [[ -e "$source_env"        && ! -e "$target_path/.env"     ]] && ln -s "$source_env"        "$target_path/.env"
+            [[ -e "$source_claude_dir" && ! -e "$target_path/.claude"  ]] && ln -s "$source_claude_dir" "$target_path/.claude"
+            [[ -e "$source_claude_md"  && ! -e "$target_path/CLAUDE.md" ]] && ln -s "$source_claude_md"  "$target_path/CLAUDE.md"
+            if command git -C "$target_path" rev-parse --verify --quiet HEAD^{commit} >/dev/null 2>&1; then
+                command git -C "$target_path" push -u origin "$branch" || return $?
+            else
+                command git -C "$target_path" config "branch.$branch.remote" origin
+                command git -C "$target_path" config "branch.$branch.merge" "refs/heads/$branch"
+                echo "Branch '$branch' has no commits yet; upstream preconfigured so your first 'git push' will create origin/$branch." >&2
+            fi
+            cd "$target_path"
+            ;;
+
+        com|compull)
+            if [[ $# -ne 1 ]]; then
+                echo "Usage: git $1" >&2
+                return 1
+            fi
+            local current_path relative_repo_path workspace_path
+            current_path=$(command git rev-parse --show-toplevel 2>/dev/null) || {
+                echo "Not in a git repository" >&2
+                return 1
+            }
+            case "$current_path" in
+                "$workspace_root"/*)
+                    workspace_path="$current_path"
+                    ;;
+                "$worktrees_root"/*)
+                    local current_branch
+                    current_branch=$(command git branch --show-current)
+                    local relative_with_branch="${current_path#"$worktrees_root"/}"
+                    relative_repo_path="${relative_with_branch%/"$current_branch"}"
+                    workspace_path="$workspace_root/$relative_repo_path"
+                    ;;
+                *)
+                    echo "Repository must live under $workspace_root or $worktrees_root" >&2
+                    return 1
+                    ;;
+            esac
+            if [[ ! -d "$workspace_path" ]]; then
+                echo "Workspace repo not found: $workspace_path" >&2
+                return 1
+            fi
+            local landing_branch
+            if command git -C "$workspace_path" show-ref --verify --quiet refs/heads/main; then
+                landing_branch=main
+            elif command git -C "$workspace_path" show-ref --verify --quiet refs/heads/master; then
+                landing_branch=master
+            else
+                echo "Could not find main or master in $workspace_path" >&2
+                return 1
+            fi
+            local current_branch
+            current_branch=$(command git -C "$workspace_path" branch --show-current)
+            if [[ "$current_branch" != "$landing_branch" ]]; then
+                command git -C "$workspace_path" checkout "$landing_branch" || return $?
+            fi
+            cd "$workspace_path"
+            [[ "$1" == "compull" ]] && { command git pull || return $?; }
+            ;;
+
+        pulled)
+            if [[ $# -ne 1 ]]; then
+                echo "Usage: git pulled" >&2
+                return 1
+            fi
+            local current_branch
+            current_branch=$(command git branch --show-current)
+            if [[ -z "$current_branch" ]]; then
+                echo "Could not determine current branch" >&2
+                return 1
+            fi
+            local current_path="$PWD" worktree_path="" repo_root
+            if [[ "$current_path" == "$worktrees_root"/* ]]; then
+                local search_path="$current_path" git_file=""
+                while [[ "$search_path" == "$worktrees_root" || "$search_path" == "$worktrees_root"/* ]]; do
+                    if [[ -f "$search_path/.git" ]]; then
+                        git_file="$search_path/.git"
+                        worktree_path="$search_path"
+                        break
+                    fi
+                    [[ "$search_path" == "$worktrees_root" ]] && break
+                    search_path="${search_path:h}"
+                done
+                if [[ -z "$git_file" ]]; then
+                    echo "Could not find .git file under $worktrees_root" >&2
+                    return 1
+                fi
+                local git_content gitdir git_common_dir
+                git_content=$(<"$git_file")
+                gitdir="${git_content#gitdir: }"
+                [[ "$gitdir" != /* ]] && gitdir="${git_file:h}/$gitdir"
+                git_common_dir=$(command git --git-dir="$gitdir" rev-parse --path-format=absolute --git-common-dir)
+                repo_root="${git_common_dir:h}"
+            else
+                repo_root=$(command git rev-parse --show-toplevel) || return $?
+            fi
+            cd "$repo_root" || return $?
+            unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+            command git checkout main 2>/dev/null || command git checkout master || return $?
+            command git pull || return $?
+            if [[ -n "$worktree_path" ]]; then
+                command git worktree remove "$worktree_path" || return $?
+            fi
+            command git branch -d "$current_branch" || return $?
+            command git remote prune origin --dry-run
+            command git worktree prune --dry-run
+            echo -n "Wanna do that prune? (y/N) "
+            local resp
+            read resp
+            if [[ "$resp" == "y" || "$resp" == "Y" ]]; then
+                command git remote prune origin
+                command git worktree prune
+            fi
+            ;;
+
+        *)
+            command git "$@"
+            ;;
+    esac
+}
+
+function rm() {
+    for e in "$@" ; do
+        ee=$(basename "$e")
+        if [ -f ~/.Trash/"$ee" ] ; then
+            mv "$e" ~/.Trash/"$ee $(uuidgen)"
+        else
+            mv "$e" ~/.Trash/
+        fi
+    done
+}

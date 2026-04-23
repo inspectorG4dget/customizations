@@ -1,0 +1,19 @@
+[user]
+    name = [your name here]
+    email = [your email here]
+[alias]
+    co = checkout
+    com = "!f() { git checkout master || git checkout main; }; f"
+    cob = "!f() { git checkout -b $1; git push -u origin $1; }; f"
+    compush = "!f() { git commit -m \"$1\"; git push ; }; f"
+    pushcom = compush
+    comm = commit -m
+    comm = commit -m
+    st = status
+    rpo = remote prune origin
+    rpod = remote prune origin --dry-run
+[core]
+    autocrlf = input
+    editor = vim
+[merge]
+    tool = meld

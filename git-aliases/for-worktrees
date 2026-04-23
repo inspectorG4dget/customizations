@@ -1,0 +1,14 @@
+[user]
+    name = [your name here]
+    email = [your email here]
+[alias]
+    compush = "!f() { git commit -m \"$1\"; git push ; }; f"
+    pushcom = compush
+    comm = commit -m
+    st = status
+    rpo = remote prune origin
+[core]
+    autocrlf = input
+    editor = vim
+[merge]
+    tool = meld
